@@ -12,18 +12,18 @@ import (
 
 // NewDialog represents the new session creation dialog
 type NewDialog struct {
-	nameInput      textinput.Model
-	pathInput      textinput.Model
-	commandInput   textinput.Model
-	focusIndex     int
-	width          int
-	height         int
-	visible        bool
-	presetCommands []string
-	commandCursor  int
-	// Parent group (auto-selected from cursor position)
+	nameInput       textinput.Model
+	pathInput       textinput.Model
+	commandInput    textinput.Model
+	focusIndex      int
+	width           int
+	height          int
+	visible         bool
+	presetCommands  []string
+	commandCursor   int
 	parentGroupPath string
 	parentGroupName string
+	pathSuggestions []string // stores all available path suggestions
 }
 
 // NewNewDialog creates a new NewDialog instance
@@ -40,6 +40,7 @@ func NewNewDialog() *NewDialog {
 	pathInput.Placeholder = "~/project/path"
 	pathInput.CharLimit = 256
 	pathInput.Width = 40
+	pathInput.ShowSuggestions = true // enable built-in suggestions
 
 	// Get current working directory for default path
 	cwd, err := os.Getwd()
