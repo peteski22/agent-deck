@@ -80,24 +80,8 @@ release:
     go install github.com/asheshgoplani/agent-deck/cmd/agent-deck@v{{.Version}}
     ```
 
-    **Homebrew:**
+    **From Source:**
     ```bash
-    brew install asheshgoplani/tap/agent-deck
+    git clone https://github.com/asheshgoplani/agent-deck.git
+    cd agent-deck && make install
     ```
-
-brews:
-  - name: agent-deck
-    repository:
-      owner: asheshgoplani
-      name: homebrew-tap
-      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    folder: Formula
-    homepage: "https://github.com/asheshgoplani/agent-deck"
-    description: "Terminal session manager for AI coding agents"
-    license: "MIT"
-    dependencies:
-      - name: tmux
-    test: |
-      system "#{bin}/agent-deck", "version"
-    install: |
-      bin.install "agent-deck"
