@@ -36,6 +36,161 @@ func IsTmuxAvailable() error {
 	return nil
 }
 
+// TerminalInfo contains detected terminal information
+type TerminalInfo struct {
+	Name           string // Terminal name (warp, iterm2, kitty, alacritty, etc.)
+	SupportsOSC8   bool   // Supports OSC 8 hyperlinks
+	SupportsOSC52  bool   // Supports OSC 52 clipboard
+	SupportsTrueColor bool // Supports 24-bit color
+}
+
+// DetectTerminal identifies the current terminal emulator from environment variables
+// Returns terminal name: "warp", "iterm2", "kitty", "alacritty", "vscode", "windows-terminal", or "unknown"
+func DetectTerminal() string {
+	// Check terminal-specific environment variables (most reliable)
+
+	// Warp Terminal
+	if os.Getenv("TERM_PROGRAM") == "WarpTerminal" || os.Getenv("WARP_IS_LOCAL_SHELL_SESSION") != "" {
+		return "warp"
+	}
+
+	// iTerm2
+	if os.Getenv("TERM_PROGRAM") == "iTerm.app" || os.Getenv("ITERM_SESSION_ID") != "" {
+		return "iterm2"
+	}
+
+	// kitty
+	if os.Getenv("TERM") == "xterm-kitty" || os.Getenv("KITTY_WINDOW_ID") != "" {
+		return "kitty"
+	}
+
+	// Alacritty
+	if os.Getenv("ALACRITTY_SOCKET") != "" || os.Getenv("ALACRITTY_LOG") != "" {
+		return "alacritty"
+	}
+
+	// VS Code integrated terminal
+	if os.Getenv("TERM_PROGRAM") == "vscode" || os.Getenv("VSCODE_INJECTION") != "" {
+		return "vscode"
+	}
+
+	// Windows Terminal
+	if os.Getenv("WT_SESSION") != "" {
+		return "windows-terminal"
+	}
+
+	// WezTerm
+	if os.Getenv("TERM_PROGRAM") == "WezTerm" || os.Getenv("WEZTERM_PANE") != "" {
+		return "wezterm"
+	}
+
+	// Apple Terminal.app
+	if os.Getenv("TERM_PROGRAM") == "Apple_Terminal" {
+		return "apple-terminal"
+	}
+
+	// Hyper
+	if os.Getenv("TERM_PROGRAM") == "Hyper" {
+		return "hyper"
+	}
+
+	// Check TERM_PROGRAM as fallback
+	if termProgram := os.Getenv("TERM_PROGRAM"); termProgram != "" {
+		return strings.ToLower(termProgram)
+	}
+
+	return "unknown"
+}
+
+// GetTerminalInfo returns detailed terminal capabilities
+func GetTerminalInfo() TerminalInfo {
+	terminal := DetectTerminal()
+
+	info := TerminalInfo{
+		Name:           terminal,
+		SupportsOSC8:   false,
+		SupportsOSC52:  false,
+		SupportsTrueColor: false,
+	}
+
+	// Check COLORTERM for true color support
+	colorterm := os.Getenv("COLORTERM")
+	if colorterm == "truecolor" || colorterm == "24bit" {
+		info.SupportsTrueColor = true
+	}
+
+	// Set capabilities based on terminal
+	// Reference: https://github.com/Alhadis/OSC8-Adoption
+	switch terminal {
+	case "warp":
+		// Warp: Full modern terminal support
+		info.SupportsOSC8 = true   // Native clickable paths
+		info.SupportsOSC52 = true  // Clipboard integration
+		info.SupportsTrueColor = true
+
+	case "iterm2":
+		// iTerm2: Excellent escape sequence support
+		info.SupportsOSC8 = true
+		info.SupportsOSC52 = true
+		info.SupportsTrueColor = true
+
+	case "kitty":
+		// kitty: Full modern terminal support
+		info.SupportsOSC8 = true
+		info.SupportsOSC52 = true
+		info.SupportsTrueColor = true
+
+	case "alacritty":
+		// Alacritty: OSC 8 since v0.11, OSC 52 supported
+		info.SupportsOSC8 = true
+		info.SupportsOSC52 = true
+		info.SupportsTrueColor = true
+
+	case "wezterm":
+		// WezTerm: Full support
+		info.SupportsOSC8 = true
+		info.SupportsOSC52 = true
+		info.SupportsTrueColor = true
+
+	case "windows-terminal":
+		// Windows Terminal: OSC 8 since v1.4
+		info.SupportsOSC8 = true
+		info.SupportsOSC52 = true
+		info.SupportsTrueColor = true
+
+	case "vscode":
+		// VS Code: OSC 8 supported in integrated terminal
+		info.SupportsOSC8 = true
+		info.SupportsOSC52 = true
+		info.SupportsTrueColor = true
+
+	case "hyper":
+		// Hyper: Limited OSC support
+		info.SupportsOSC8 = false
+		info.SupportsOSC52 = true
+		info.SupportsTrueColor = true
+
+	case "apple-terminal":
+		// Apple Terminal.app: No OSC 8 support
+		info.SupportsOSC8 = false
+		info.SupportsOSC52 = false
+		info.SupportsTrueColor = false
+
+	default:
+		// Unknown terminal - assume basic support
+		// Most modern terminals support these features
+		info.SupportsOSC8 = true  // Optimistic default
+		info.SupportsOSC52 = true
+	}
+
+	return info
+}
+
+// SupportsHyperlinks returns true if the current terminal supports OSC 8 hyperlinks
+func SupportsHyperlinks() bool {
+	return GetTerminalInfo().SupportsOSC8
+}
+
 // Tool detection patterns (used by DetectTool for initial tool identification)
 var toolDetectionPatterns = map[string][]*regexp.Regexp{
 	"claude": {
@@ -239,6 +394,33 @@ func (s *Session) Start(command string) error {
 	// This can fail on very old tmux versions
 	_ = exec.Command("tmux", "set-option", "-t", s.Name, "mouse", "on").Run()
 
+	// Enable escape sequence passthrough for modern terminal features (tmux 3.2+)
+	// This allows:
+	// - OSC 8: Clickable hyperlinks/file paths (Warp, iTerm2, kitty, Alacritty, etc.)
+	// - OSC 52: Clipboard integration (copy/paste from remote sessions)
+	// - Image protocols: Inline images in terminals that support it
+	// Uses -q flag to silently ignore on older tmux versions (< 3.2)
+	_ = exec.Command("tmux", "set-option", "-t", s.Name, "-q", "allow-passthrough", "on").Run()
+
+	// Enable hyperlink support in terminal features (tmux 3.4+, server-wide option)
+	// This tells tmux to track hyperlinks like it tracks colors/attributes
+	// Required for OSC 8 hyperlinks to work - passthrough alone isn't enough
+	// Uses -as to append to existing terminal-features, -q to ignore if unsupported
+	_ = exec.Command("tmux", "set", "-asq", "terminal-features", ",*:hyperlinks").Run()
+
+	// Enable OSC 52 clipboard integration for seamless copy/paste
+	// Works with: Warp, iTerm2, kitty, Alacritty, WezTerm, Windows Terminal, VS Code
+	// The 'on' value (tmux 2.6+) allows apps inside tmux to set the clipboard
+	_ = exec.Command("tmux", "set-option", "-t", s.Name, "set-clipboard", "on").Run()
+
+	// Set large history buffer for AI agent sessions (default is 2000)
+	// AI agents produce extensive output, 50000 lines covers ~1000 screens
+	_ = exec.Command("tmux", "set-option", "-t", s.Name, "history-limit", "50000").Run()
+
+	// Reduce escape-time for responsive Vim/editor usage (default 500ms is too slow)
+	// 10ms is a good balance between responsiveness and SSH reliability
+	_ = exec.Command("tmux", "set-option", "-t", s.Name, "escape-time", "10").Run()
+
 	// Send the command to the session
 	if command != "" {
 		if err := s.SendKeys(command); err != nil {
@@ -264,7 +446,14 @@ func (s *Session) Exists() bool {
 // Enables:
 // - mouse on: Mouse wheel scrolling, text selection, pane resizing
 // - set-clipboard on: OSC 52 clipboard integration (works with modern terminals)
+// - allow-passthrough on: OSC 8 hyperlinks, advanced escape sequences (tmux 3.2+)
 // - history-limit 50000: Large scrollback buffer for AI agent output
+// - escape-time 10: Fast Vim/editor responsiveness (default 500ms is too slow)
+//
+// Terminal compatibility:
+// - Warp, iTerm2, kitty, Alacritty, WezTerm: Full support (hyperlinks, clipboard, true color)
+// - Windows Terminal, VS Code: Full support
+// - Apple Terminal.app: Limited (no hyperlinks or clipboard)
 //
 // Note: With mouse mode on, hold Shift while selecting to use native terminal selection
 // instead of tmux's selection (useful for copying to system clipboard in some terminals)
@@ -277,11 +466,32 @@ func (s *Session) EnableMouseMode() error {
 
 	// Enable OSC 52 clipboard integration
 	// This allows tmux to copy directly to system clipboard in supported terminals
-	// (iTerm2, Alacritty, kitty, Windows Terminal, etc.)
+	// (Warp, iTerm2, Alacritty, kitty, WezTerm, Windows Terminal, VS Code, etc.)
 	clipboardCmd := exec.Command("tmux", "set-option", "-t", s.Name, "set-clipboard", "on")
 	if err := clipboardCmd.Run(); err != nil {
 		// Non-fatal: older tmux versions may not support this
 		debugLog("%s: failed to enable clipboard: %v", s.DisplayName, err)
+	}
+
+	// Enable escape sequence passthrough for modern terminal features (tmux 3.2+)
+	// This allows:
+	// - OSC 8: Clickable hyperlinks/file paths in Warp, iTerm2, kitty, etc.
+	// - OSC 52: Clipboard integration (apps inside tmux can set clipboard)
+	// - Image protocols: Inline images in supported terminals
+	// Uses -q flag to silently ignore on older tmux versions
+	passthroughCmd := exec.Command("tmux", "set-option", "-t", s.Name, "-q", "allow-passthrough", "on")
+	if err := passthroughCmd.Run(); err != nil {
+		// Non-fatal: tmux < 3.2 doesn't support this option
+		debugLog("%s: failed to enable passthrough (tmux < 3.2?): %v", s.DisplayName, err)
+	}
+
+	// Enable hyperlink support in terminal features (tmux 3.4+, server-wide option)
+	// This tells tmux to track hyperlinks like it tracks colors/attributes
+	// Required for OSC 8 hyperlinks to work - passthrough alone isn't enough
+	hyperlinkCmd := exec.Command("tmux", "set", "-asq", "terminal-features", ",*:hyperlinks")
+	if err := hyperlinkCmd.Run(); err != nil {
+		// Non-fatal: tmux < 3.4 doesn't support hyperlinks in terminal-features
+		debugLog("%s: failed to enable hyperlinks (tmux < 3.4?): %v", s.DisplayName, err)
 	}
 
 	// Set large history limit for AI agent sessions (default is 2000)
@@ -290,6 +500,14 @@ func (s *Session) EnableMouseMode() error {
 	if err := historyCmd.Run(); err != nil {
 		// Non-fatal: history limit is a nice-to-have
 		debugLog("%s: failed to set history-limit: %v", s.DisplayName, err)
+	}
+
+	// Reduce escape-time for responsive Vim/editor usage (default 500ms is too slow)
+	// 10ms is a good balance between responsiveness and SSH reliability
+	escapeCmd := exec.Command("tmux", "set-option", "-t", s.Name, "escape-time", "10")
+	if err := escapeCmd.Run(); err != nil {
+		// Non-fatal: escape-time is a nice-to-have
+		debugLog("%s: failed to set escape-time: %v", s.DisplayName, err)
 	}
 
 	return nil
