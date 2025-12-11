@@ -258,3 +258,28 @@ func TestCreateForkedInstance_NoSessionIDFlag(t *testing.T) {
 		t.Errorf("Forked instance Command should contain --fork-session, got: %s", forked.Command)
 	}
 }
+
+// TestWaitForClaudeSession tests the wait-for-detection functionality
+func TestWaitForClaudeSession(t *testing.T) {
+	inst := NewInstance("test", "/tmp/nonexistent-project-dir")
+	inst.Tool = "claude"
+
+	// Should timeout and return empty when no session file exists
+	start := time.Now()
+	sessionID := inst.WaitForClaudeSession(500 * time.Millisecond)
+	elapsed := time.Since(start)
+
+	if sessionID != "" {
+		t.Errorf("Should return empty when no session file, got: %s", sessionID)
+	}
+
+	// Should have waited at least close to the timeout
+	if elapsed < 400*time.Millisecond {
+		t.Errorf("Should have waited ~500ms, but only waited %v", elapsed)
+	}
+
+	// ClaudeSessionID should still be empty
+	if inst.ClaudeSessionID != "" {
+		t.Errorf("ClaudeSessionID should be empty, got: %s", inst.ClaudeSessionID)
+	}
+}
